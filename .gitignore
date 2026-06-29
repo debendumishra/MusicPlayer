@@ -1,0 +1,15 @@
+# Android build outputs and caches
+.gradle/
+build/
+app/build/
+local.properties
+
+# Android Studio / IntelliJ files
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# OS specific files
+.DS_Store
+Thumbs.db

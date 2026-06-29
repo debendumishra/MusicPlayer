@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.GlassicMusic" parent="Theme.Material3.Dark.NoActionBar">
+        <item name="android:statusBarColor">#0F0C1B</item>
+        <item name="android:navigationBarColor">#050508</item>
+        <item name="android:windowTranslucentStatus">false</item>
+        <item name="android:windowDrawsSystemBarBackgrounds">true</item>
+    </style>
+</resources>
