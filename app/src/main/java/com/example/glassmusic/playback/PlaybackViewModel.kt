@@ -22,6 +22,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import com.example.glassmusic.search.YouTubeSearchExtractor
 
 @UnstableApi
 class PlaybackViewModel : ViewModel() {
@@ -35,6 +36,7 @@ class PlaybackViewModel : ViewModel() {
     private var mediaController: MediaController? = null
     private var progressJob: Job? = null
     private var appContext: Context? = null
+    private var searchExtractor: YouTubeSearchExtractor? = null
 
     // Equalizer sliders (0 to 100 level) for 5 bands: 60Hz, 230Hz, 910Hz, 4kHz, 14kHz
     private val _eqBands = MutableStateFlow(listOf(50, 50, 50, 50, 50))
@@ -50,6 +52,28 @@ class PlaybackViewModel : ViewModel() {
         appContext = context.applicationContext
         loadPersistedData(context.applicationContext)
         fetchHealthyInstances()
+
+        if (searchExtractor == null) {
+            searchExtractor = YouTubeSearchExtractor(context.applicationContext)
+            viewModelScope.launch {
+                searchExtractor?.resultsFlow?.collect { list ->
+                    val mappedList = list.map { track ->
+                        val rawId = track.id.removePrefix("yt_").removePrefix("ytlive_")
+                        if (track.id.startsWith("ytlive_")) {
+                            track
+                        } else {
+                            track.copy(mediaUri = getStreamingUri(rawId))
+                        }
+                    }
+                    _searchResults.value = mappedList
+                }
+            }
+            viewModelScope.launch {
+                searchExtractor?.isLoadingFlow?.collect { loading ->
+                    _uiState.update { it.copy(isLoading = loading) }
+                }
+            }
+        }
 
         if (mediaController != null) return
 
@@ -90,7 +114,8 @@ class PlaybackViewModel : ViewModel() {
             _uiState.update { it.copy(
                 currentTrack = currentTrack,
                 trackDuration = controller.duration.coerceAtLeast(0L),
-                playbackProgress = controller.currentPosition
+                playbackProgress = controller.currentPosition,
+                bufferedPosition = controller.bufferedPosition.coerceAtLeast(0L)
             )}
         } else {
             val restoredPlaylist = _uiState.value.playlist
@@ -163,65 +188,74 @@ class PlaybackViewModel : ViewModel() {
                 error.printStackTrace()
                 
                 val currentTrack = _uiState.value.currentTrack
-                if (currentTrack != null && currentTrack.id.startsWith("yt_")) {
-                    val oldUri = currentTrack.mediaUri.toString()
-                    val oldHost = currentTrack.mediaUri.host ?: ""
-                    val nextHost = getNextHealthyInstanceHost(oldHost)
-                    
-                    if (nextHost != null) {
-                        val newUriStr = oldUri.replace(oldHost, nextHost)
-                        val updatedTrack = currentTrack.copy(mediaUri = Uri.parse(newUriStr))
+                if (currentTrack != null && (currentTrack.id.startsWith("yt_") || currentTrack.id.startsWith("ytlive_"))) {
+                    viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                        var updatedTrack = currentTrack
+                        if (currentTrack.id.startsWith("ytlive_")) {
+                            val rawId = currentTrack.id.removePrefix("ytlive_")
+                            val freshHls = resolveLiveStreamUrl(rawId)
+                            if (freshHls != null) {
+                                updatedTrack = currentTrack.copy(mediaUri = Uri.parse(freshHls))
+                            }
+                        } else {
+                            val oldUri = currentTrack.mediaUri.toString()
+                            val oldHost = currentTrack.mediaUri.host ?: ""
+                            val nextHost = getNextHealthyInstanceHost(oldHost)
+                            if (nextHost != null) {
+                                val newUriStr = oldUri.replace(oldHost, nextHost)
+                                updatedTrack = currentTrack.copy(mediaUri = Uri.parse(newUriStr))
+                            }
+                        }
                         
-                        viewModelScope.launch(kotlinx.coroutines.Dispatchers.Main) {
+                        launch(kotlinx.coroutines.Dispatchers.Main) {
                             appContext?.let {
                                 android.widget.Toast.makeText(
                                     it,
-                                    "Playback error. Retrying with backup server...",
+                                    "Playback error. Retrying stream...",
                                     android.widget.Toast.LENGTH_SHORT
                                 ).show()
                             }
-                        }
-                        
-                        _uiState.update { state ->
-                            val updatedPlaylist = state.playlist.map { 
-                                if (it.id == currentTrack.id) updatedTrack else it 
-                            }
-                            state.copy(
-                                playlist = updatedPlaylist,
-                                currentTrack = updatedTrack,
-                                isLoading = true
-                            )
-                        }
-                        
-                        mediaController?.let { controller ->
-                            val currentPos = controller.currentPosition
-                            val currentIndex = controller.currentMediaItemIndex
                             
-                            controller.stop()
-                            controller.clearMediaItems()
-                            
-                            val mediaItems = _uiState.value.playlist.map { track ->
-                                val builder = MediaItem.Builder()
-                                    .setMediaId(track.id)
-                                    .setUri(track.mediaUri)
-                                    .setMediaMetadata(
-                                        androidx.media3.common.MediaMetadata.Builder()
-                                            .setTitle(track.title)
-                                            .setArtist(track.artist)
-                                            .build()
-                                    )
-                                if (track.mediaUri.toString().contains("/live/")) {
-                                    builder.setMimeType(androidx.media3.common.MimeTypes.APPLICATION_M3U8)
+                            _uiState.update { state ->
+                                val updatedPlaylist = state.playlist.map { 
+                                    if (it.id == currentTrack.id) updatedTrack else it 
                                 }
-                                builder.build()
+                                state.copy(
+                                    playlist = updatedPlaylist,
+                                    currentTrack = updatedTrack,
+                                    isLoading = true
+                                )
                             }
                             
-                            controller.setMediaItems(mediaItems, currentIndex, currentPos)
-                            controller.prepare()
-                            controller.play()
+                            mediaController?.let { controller ->
+                                val currentPos = controller.currentPosition
+                                val currentIndex = controller.currentMediaItemIndex
+                                
+                                controller.stop()
+                                controller.clearMediaItems()
+                                
+                                val mediaItems = _uiState.value.playlist.map { track ->
+                                    val builder = MediaItem.Builder()
+                                        .setMediaId(track.id)
+                                        .setUri(track.mediaUri)
+                                        .setMediaMetadata(
+                                            androidx.media3.common.MediaMetadata.Builder()
+                                                .setTitle(track.title)
+                                                .setArtist(track.artist)
+                                                .build()
+                                        )
+                                    if (track.id.startsWith("ytlive_") || track.mediaUri.toString().contains(".m3u8")) {
+                                        builder.setMimeType(androidx.media3.common.MimeTypes.APPLICATION_M3U8)
+                                    }
+                                    builder.build()
+                                }
+                                controller.setMediaItems(mediaItems, currentIndex, currentPos)
+                                controller.prepare()
+                                controller.play()
+                            }
                         }
-                        return
                     }
+                    return
                 }
                 
                 _uiState.update { it.copy(isPlaying = false, isLoading = false) }
@@ -267,7 +301,8 @@ class PlaybackViewModel : ViewModel() {
                     val pos = controller.currentPosition
                     _uiState.update { it.copy(
                         playbackProgress = pos,
-                        trackDuration = controller.duration.coerceAtLeast(0L)
+                        trackDuration = controller.duration.coerceAtLeast(0L),
+                        bufferedPosition = controller.bufferedPosition.coerceAtLeast(0L)
                     ) }
                     
                     saveCounter++
@@ -285,42 +320,93 @@ class PlaybackViewModel : ViewModel() {
         progressJob?.cancel()
     }
 
-    fun setPlaylist(tracks: List<Track>, playIndex: Int = 0) {
-        _uiState.update { it.copy(playlist = tracks, isLoading = true) }
-        appContext?.let { savePlaybackState(it, 0L) }
-        
-        val controller = mediaController ?: return
-        controller.stop()
-        controller.clearMediaItems()
-        
-        val mediaItems = tracks.map { track ->
-            val builder = MediaItem.Builder()
-                .setMediaId(track.id)
-                .setUri(track.mediaUri)
-                .setMediaMetadata(
-                    androidx.media3.common.MediaMetadata.Builder()
-                        .setTitle(track.title)
-                        .setArtist(track.artist)
-                        .build()
-                )
-            if (track.mediaUri.toString().contains("/live/")) {
-                builder.setMimeType(androidx.media3.common.MimeTypes.APPLICATION_M3U8)
+    private suspend fun prepareTrackForPlayback(track: Track): Track {
+        if (track.id.startsWith("ytlive_")) {
+            val rawId = track.id.removePrefix("ytlive_")
+            val hlsUrl = resolveLiveStreamUrl(rawId)
+            if (hlsUrl != null) {
+                return track.copy(mediaUri = Uri.parse(hlsUrl))
             }
-            builder.build()
         }
-        
-        controller.setMediaItems(mediaItems, playIndex, 0L)
-        controller.prepare()
-        controller.play()
+        return track
+    }
+
+    fun setPlaylist(tracks: List<Track>, playIndex: Int = 0) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true) }
+            
+            val trackToPlay = tracks.getOrNull(playIndex)
+            val updatedTracks = tracks.toMutableList()
+            if (trackToPlay != null) {
+                val prepared = prepareTrackForPlayback(trackToPlay)
+                updatedTracks[playIndex] = prepared
+            }
+            
+            _uiState.update { it.copy(playlist = updatedTracks, isLoading = false) }
+            appContext?.let { savePlaybackState(it, 0L) }
+            
+            val controller = mediaController ?: return@launch
+            controller.stop()
+            controller.clearMediaItems()
+            
+            val mediaItems = updatedTracks.map { track ->
+                val builder = MediaItem.Builder()
+                    .setMediaId(track.id)
+                    .setUri(track.mediaUri)
+                    .setMediaMetadata(
+                        androidx.media3.common.MediaMetadata.Builder()
+                            .setTitle(track.title)
+                            .setArtist(track.artist)
+                            .build()
+                    )
+                if (track.id.startsWith("ytlive_") || track.mediaUri.toString().contains(".m3u8")) {
+                    builder.setMimeType(androidx.media3.common.MimeTypes.APPLICATION_M3U8)
+                }
+                builder.build()
+            }
+            
+            controller.setMediaItems(mediaItems, playIndex, 0L)
+            controller.prepare()
+            controller.play()
+        }
     }
 
     fun playTrackAtIndex(index: Int) {
-        val controller = mediaController ?: return
-        if (index in 0 until controller.mediaItemCount) {
-            controller.seekTo(index, 0L)
-            controller.play()
-        } else {
-            setPlaylist(_uiState.value.playlist, index)
+        val playlist = _uiState.value.playlist
+        val track = playlist.getOrNull(index) ?: return
+        
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true) }
+            val prepared = prepareTrackForPlayback(track)
+            
+            val updatedPlaylist = playlist.toMutableList()
+            updatedPlaylist[index] = prepared
+            _uiState.update { it.copy(playlist = updatedPlaylist, isLoading = false) }
+            
+            val controller = mediaController ?: return@launch
+            
+            if (index in 0 until controller.mediaItemCount) {
+                val currentMedia = controller.getMediaItemAt(index)
+                if (currentMedia.localConfiguration?.uri != prepared.mediaUri) {
+                    val builder = MediaItem.Builder()
+                        .setMediaId(prepared.id)
+                        .setUri(prepared.mediaUri)
+                        .setMediaMetadata(
+                            androidx.media3.common.MediaMetadata.Builder()
+                                .setTitle(prepared.title)
+                                .setArtist(prepared.artist)
+                                .build()
+                        )
+                    if (prepared.id.startsWith("ytlive_") || prepared.mediaUri.toString().contains(".m3u8")) {
+                        builder.setMimeType(androidx.media3.common.MimeTypes.APPLICATION_M3U8)
+                    }
+                    controller.replaceMediaItem(index, builder.build())
+                }
+                controller.seekTo(index, 0L)
+                controller.play()
+            } else {
+                setPlaylist(updatedPlaylist, index)
+            }
         }
     }
 
@@ -497,6 +583,7 @@ class PlaybackViewModel : ViewModel() {
         obj.put("mediaUri", track.mediaUri.toString())
         obj.put("artworkUri", track.artworkUri ?: "")
         obj.put("duration", track.duration)
+        obj.put("folderName", track.folderName)
         return obj
     }
 
@@ -507,13 +594,15 @@ class PlaybackViewModel : ViewModel() {
         val mediaUriStr = obj.getString("mediaUri")
         val artworkUri = obj.optString("artworkUri", "").takeIf { it.isNotEmpty() } ?: "android.resource://com.example.glassmusic/drawable/default_cover"
         val duration = obj.getLong("duration")
+        val folderName = obj.optString("folderName", "Music")
         return Track(
             id = id,
             title = title,
             artist = artist,
             mediaUri = Uri.parse(mediaUriStr),
             artworkUri = artworkUri,
-            duration = duration
+            duration = duration,
+            folderName = folderName
         )
     }
 
@@ -716,6 +805,10 @@ class PlaybackViewModel : ViewModel() {
     }
 
     fun searchYouTube(query: String) {
+        searchExtractor?.search(query)
+    }
+
+    private fun searchYouTubeOld(query: String) {
         viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             _uiState.update { it.copy(isLoading = true) }
             val results = mutableListOf<Track>()
@@ -1011,19 +1104,28 @@ class PlaybackViewModel : ViewModel() {
         return seconds * 1000L
     }
 
+    fun getStreamingUri(videoId: String): Uri {
+        val base = healthyStreamingInstances.firstOrNull() ?: "https://inv.zoomerville.com"
+        return Uri.parse("$base/latest_version?id=$videoId&itag=140")
+    }
+
     private suspend fun resolveLiveStreamUrl(videoId: String): String? = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
         val pipedInstances = listOf(
+            "https://api.piped.yt",
             "https://pipedapi.kavin.rocks",
-            "https://piped-api.garudalinux.org",
-            "https://pipedapi.tokhmi.xyz"
+            "https://pipedapi.tokhmi.xyz",
+            "https://pipedapi.colt.top",
+            "https://piped-api.lunar.icu",
+            "https://pipedapi.drgns.space",
+            "https://piped-api.garudalinux.org"
         )
         for (instance in pipedInstances) {
             try {
                 val url = java.net.URL("$instance/streams/$videoId")
                 val conn = url.openConnection() as java.net.HttpURLConnection
                 conn.requestMethod = "GET"
-                conn.connectTimeout = 4000
-                conn.readTimeout = 4000
+                conn.connectTimeout = 3000
+                conn.readTimeout = 3000
                 conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
                 
                 if (conn.responseCode == 200) {
@@ -1037,8 +1139,63 @@ class PlaybackViewModel : ViewModel() {
                     }
                 }
             } catch (e: Exception) {
-                e.printStackTrace()
+                // Try next
             }
+        }
+
+        val invidiousInstances = healthyStreamingInstances.takeIf { it.isNotEmpty() } ?: listOf(
+            "https://inv.zoomerville.com",
+            "https://invidious.projectsegfau.lt",
+            "https://yewtu.be",
+            "https://invidious.flokinet.to"
+        )
+        for (instance in invidiousInstances) {
+            try {
+                val url = java.net.URL("$instance/api/v1/videos/$videoId")
+                val conn = url.openConnection() as java.net.HttpURLConnection
+                conn.requestMethod = "GET"
+                conn.connectTimeout = 3000
+                conn.readTimeout = 3000
+                conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+                
+                if (conn.responseCode == 200) {
+                    val text = conn.inputStream.bufferedReader().use { it.readText() }
+                    val jsonObj = JSONObject(text)
+                    if (jsonObj.optBoolean("liveNow", false) && jsonObj.has("hlsUrl")) {
+                        val hlsUrl = jsonObj.getString("hlsUrl")
+                        if (hlsUrl.isNotEmpty()) {
+                            return@withContext hlsUrl
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                // Try next
+            }
+        }
+
+        try {
+            val url = java.net.URL("https://www.youtube.com/watch?v=$videoId")
+            val conn = url.openConnection() as java.net.HttpURLConnection
+            conn.requestMethod = "GET"
+            conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+            conn.connectTimeout = 5000
+            conn.readTimeout = 5000
+            
+            if (conn.responseCode == 200) {
+                val html = conn.inputStream.bufferedReader().use { it.readText() }
+                val key = "\"hlsManifestUrl\":\""
+                val idx = html.indexOf(key)
+                if (idx >= 0) {
+                    val start = idx + key.length
+                    val end = html.indexOf("\"", start)
+                    if (end >= 0) {
+                        val rawUrl = html.substring(start, end)
+                        return@withContext rawUrl.replace("\\u0026", "&")
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
         return@withContext null
     }
@@ -1057,6 +1214,31 @@ class PlaybackViewModel : ViewModel() {
             hosts[nextIndex]
         } else {
             null
+        }
+    }
+
+    fun downloadTrack(track: Track) {
+        val context = appContext ?: return
+        val rawId = track.id.removePrefix("yt_").removePrefix("ytlive_")
+        val streamUrl = getStreamingUri(rawId).toString()
+        
+        try {
+            val request = android.app.DownloadManager.Request(Uri.parse(streamUrl))
+                .setTitle(track.title)
+                .setDescription("Downloading audio track...")
+                .setNotificationVisibility(android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                .setDestinationInExternalPublicDir(
+                    android.os.Environment.DIRECTORY_DOWNLOADS,
+                    "${track.title.replace(Regex("[\\\\/:*?\"<>|]"), "_")}.mp3"
+                )
+            
+            val downloadManager = context.getSystemService(Context.DOWNLOAD_SERVICE) as android.app.DownloadManager
+            downloadManager.enqueue(request)
+            
+            android.widget.Toast.makeText(context, "Download started: ${track.title}", android.widget.Toast.LENGTH_SHORT).show()
+        } catch (e: Exception) {
+            e.printStackTrace()
+            android.widget.Toast.makeText(context, "Download failed: ${e.message}", android.widget.Toast.LENGTH_SHORT).show()
         }
     }
 

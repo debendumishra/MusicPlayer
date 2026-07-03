@@ -46,7 +46,7 @@ fun NowPlayingScreen(
     val state by viewModel.uiState.collectAsState()
     val track = state.currentTrack ?: return
 
-    var lyricsExpanded by remember { mutableStateOf(false) }
+
 
     // Cover Art Rotation Animation
     val infiniteTransition = rememberInfiniteTransition(label = "now_playing_art_rotation")
@@ -136,6 +136,8 @@ fun NowPlayingScreen(
                     model = track.artworkModel,
                     contentDescription = track.title,
                     contentScale = ContentScale.Crop,
+                    placeholder = androidx.compose.ui.res.painterResource(id = com.example.glassmusic.R.drawable.default_cover),
+                    error = androidx.compose.ui.res.painterResource(id = com.example.glassmusic.R.drawable.default_cover),
                     modifier = Modifier
                         .fillMaxSize()
                         .clip(CircleShape)
@@ -209,19 +211,37 @@ fun NowPlayingScreen(
             val totalDuration = state.trackDuration
             val sliderPos = if (totalDuration > 0) currentPos.toFloat() / totalDuration else 0f
 
+            val bufferProgress = if (totalDuration > 0) state.bufferedPosition.toFloat() / totalDuration else 0f
+
             Column(modifier = Modifier.fillMaxWidth()) {
-                Slider(
-                    value = sliderPos,
-                    onValueChange = { percent ->
-                        viewModel.seekTo((percent * totalDuration).toLong())
-                    },
-                    colors = SliderDefaults.colors(
-                        thumbColor = NeonCyan,
-                        activeTrackColor = NeonCyan,
-                        inactiveTrackColor = GlassBgColorLight
-                    ),
-                    modifier = Modifier.fillMaxWidth()
-                )
+                Box(
+                    modifier = Modifier.fillMaxWidth(),
+                    contentAlignment = Alignment.CenterStart
+                ) {
+                    LinearProgressIndicator(
+                        progress = bufferProgress.coerceIn(0f, 1f),
+                        color = NeonCyan.copy(alpha = 0.35f),
+                        trackColor = Color.Transparent,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(4.dp)
+                            .padding(horizontal = 6.dp)
+                            .clip(RoundedCornerShape(2.dp))
+                    )
+
+                    Slider(
+                        value = sliderPos,
+                        onValueChange = { percent ->
+                            viewModel.seekTo((percent * totalDuration).toLong())
+                        },
+                        colors = SliderDefaults.colors(
+                            thumbColor = NeonCyan,
+                            activeTrackColor = NeonCyan,
+                            inactiveTrackColor = GlassBgColorLight.copy(alpha = 0.2f)
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
                 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -314,49 +334,7 @@ fun NowPlayingScreen(
 
             Spacer(modifier = Modifier.height(28.dp))
 
-            // Lyrics Glass Drawer Header
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .glassmorphic(cornerRadius = 20.dp)
-                    .clickable { lyricsExpanded = !lyricsExpanded }
-                    .padding(vertical = 14.dp, horizontal = 20.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "Lyrics",
-                    color = TextPrimary,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 15.sp
-                )
-                Icon(
-                    imageVector = if (lyricsExpanded) Icons.Rounded.KeyboardArrowDown else Icons.Rounded.KeyboardArrowUp,
-                    contentDescription = "Toggle Lyrics",
-                    tint = TextSecondary
-                )
-            }
 
-            AnimatedVisibility(visible = lyricsExpanded) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 10.dp)
-                        .glassmorphic(cornerRadius = 20.dp)
-                        .padding(20.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    val lyricsText = getMockLyrics(track.title)
-                    Text(
-                        text = lyricsText,
-                        color = TextPrimary,
-                        fontSize = 14.sp,
-                        textAlign = TextAlign.Center,
-                        lineHeight = 24.sp,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-            }
 
             Spacer(modifier = Modifier.height(28.dp))
 
@@ -460,38 +438,3 @@ private fun formatTime(ms: Long): String {
     return String.format(Locale.US, "%02d:%02d", min, sec)
 }
 
-// Generates dynamic mock lyrics aligned with track selection
-private fun getMockLyrics(songName: String): String {
-    return when (songName) {
-        "Synthwave Cruise" -> {
-            "Cruising down the grid tonight\n" +
-            "Purple skies and neon lights\n" +
-            "Feeling the bass begin to flow\n" +
-            "Nowhere to be, just let it go...\n\n" +
-            "In this dream, we fly away\n" +
-            "Into the night, far from the day."
-        }
-        "Cyber City" -> {
-            "Running through the circuits high\n" +
-            "Underneath a static sky\n" +
-            "Steel and shadows, cyan glow\n" +
-            "Digital currents, watch them flow...\n\n" +
-            "System boot up, take control\n" +
-            "Feel the code inside your soul."
-        }
-        "Midnight Sunset" -> {
-            "Chasing suns that never set\n" +
-            "Visions that I can't forget\n" +
-            "Lofi beats are spinning slow\n" +
-            "Mellow whispers, soft and low...\n\n" +
-            "Close your eyes, the world will fade\n" +
-            "In this shelter we have made."
-        }
-        else -> {
-            "Instrumental waves rolling in\n" +
-            "Let the glowing sound begin\n" +
-            "Lost inside this neon space\n" +
-            "A calm and peaceful place..."
-        }
-    }
-}

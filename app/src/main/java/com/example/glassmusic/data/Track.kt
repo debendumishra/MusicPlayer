@@ -8,7 +8,8 @@ data class Track(
     val artist: String,
     val mediaUri: Uri,
     val artworkUri: String?, // Web URL or local media store path
-    val duration: Long = 0L  // Track length in milliseconds
+    val duration: Long = 0L,  // Track length in milliseconds
+    val folderName: String = "Music"
 ) {
     val displayArtist: String
         get() = if (artist.isNullOrBlank() || artist.equals("<unknown>", ignoreCase = true) || artist.equals("unknown", ignoreCase = true) || artist.equals("unknown artist", ignoreCase = true)) {
@@ -18,10 +19,22 @@ data class Track(
         }
 
     val artworkModel: Any
-        get() = if (artworkUri != null && artworkUri.startsWith("http")) {
-            artworkUri
-        } else {
-            com.example.glassmusic.R.drawable.default_cover
+        get() = when {
+            artworkUri == null || artworkUri.isBlank() -> {
+                com.example.glassmusic.R.drawable.default_cover
+            }
+            artworkUri.startsWith("http://") || artworkUri.startsWith("https://") -> {
+                artworkUri
+            }
+            artworkUri.startsWith("//") -> {
+                "https:$artworkUri"
+            }
+            artworkUri.startsWith("android.resource://") || artworkUri.startsWith("content://") -> {
+                artworkUri
+            }
+            else -> {
+                com.example.glassmusic.R.drawable.default_cover
+            }
         }
 
     companion object {

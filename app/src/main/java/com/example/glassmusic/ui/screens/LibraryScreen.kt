@@ -40,6 +40,7 @@ import com.example.glassmusic.playback.PlaybackViewModel
 import com.example.glassmusic.playback.Playlist
 import com.example.glassmusic.ui.components.glassmorphic
 import com.example.glassmusic.ui.theme.*
+import android.widget.Toast
 
 @UnstableApi
 @Composable
@@ -60,6 +61,18 @@ fun LibraryScreen(
     var playlistNameInput by remember { mutableStateOf("") }
     var trackToAddToPlaylist by remember { mutableStateOf<Track?>(null) }
     var selectedPlaylistDetails by remember { mutableStateOf<Playlist?>(null) }
+    
+    var selectedFolder by remember { mutableStateOf<String?>(null) }
+    var localSearchQuery by remember { mutableStateOf("") }
+
+    val deleteLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartIntentSenderForResult()
+    ) { result ->
+        if (result.resultCode == android.app.Activity.RESULT_OK) {
+            deviceTracks = scanLocalAudio(context)
+            Toast.makeText(context, "Song deleted successfully", Toast.LENGTH_SHORT).show()
+        }
+    }
 
     val currentPlaylistDetails = state.playlists.find { it.id == selectedPlaylistDetails?.id }
 
@@ -222,7 +235,11 @@ fun LibraryScreen(
                                 .fillMaxHeight()
                                 .clip(RoundedCornerShape(12.dp))
                                 .background(if (isSelected) NeonPurple.copy(alpha = 0.35f) else Color.Transparent)
-                                .clickable { activeTab = index },
+                                .clickable {
+                                    activeTab = index
+                                    selectedFolder = null
+                                    localSearchQuery = ""
+                                },
                             contentAlignment = Alignment.Center
                         ) {
                             Text(
@@ -477,28 +494,229 @@ fun LibraryScreen(
                                 }
                             }
                         } else {
-                            LazyColumn(
-                                modifier = Modifier.fillMaxSize(),
-                                contentPadding = PaddingValues(bottom = 100.dp),
-                                verticalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                itemsIndexed(deviceTracks) { index, track ->
-                                    SongRowItem(
-                                        track = track,
-                                        isPlaying = state.isPlaying && state.currentTrack?.id == track.id,
-                                        isCurrent = state.currentTrack?.id == track.id,
-                                        isFavorite = state.favorites.contains(track.id),
-                                        onClick = {
-                                            viewModel.setPlaylist(deviceTracks, index)
-                                            onNavigateToPlayer()
-                                        },
-                                        onFavoriteToggle = {
-                                            viewModel.toggleFavorite(track.id)
-                                        },
-                                        onAddToPlaylist = {
-                                            trackToAddToPlaylist = track
-                                        }
+                            Column(modifier = Modifier.fillMaxWidth().weight(1f)) {
+                                // Search Box for Local Device Songs
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(48.dp)
+                                        .glassmorphic(cornerRadius = 14.dp)
+                                        .padding(horizontal = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Search,
+                                        contentDescription = "Search",
+                                        tint = TextSecondary,
+                                        modifier = Modifier.size(18.dp)
                                     )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    OutlinedTextField(
+                                        value = localSearchQuery,
+                                        onValueChange = { 
+                                            localSearchQuery = it
+                                            if (it.isNotEmpty()) selectedFolder = null
+                                        },
+                                        placeholder = { Text("Search local songs...", color = TextSecondary, fontSize = 13.sp) },
+                                        singleLine = true,
+                                        colors = TextFieldDefaults.colors(
+                                            focusedTextColor = TextPrimary,
+                                            unfocusedTextColor = TextPrimary,
+                                            focusedContainerColor = Color.Transparent,
+                                            unfocusedContainerColor = Color.Transparent,
+                                            focusedIndicatorColor = Color.Transparent,
+                                            unfocusedIndicatorColor = Color.Transparent,
+                                            cursorColor = NeonCyan
+                                        ),
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    if (localSearchQuery.isNotEmpty()) {
+                                        IconButton(onClick = { localSearchQuery = "" }) {
+                                            Icon(
+                                                imageVector = Icons.Rounded.Close,
+                                                contentDescription = "Clear",
+                                                tint = TextSecondary,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                        }
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.height(16.dp))
+
+                                if (localSearchQuery.isNotEmpty()) {
+                                    // Search Results View
+                                    val filteredTracks = deviceTracks.filter {
+                                        it.title.contains(localSearchQuery, ignoreCase = true) ||
+                                        it.artist.contains(localSearchQuery, ignoreCase = true)
+                                    }
+
+                                    if (filteredTracks.isEmpty()) {
+                                        Box(
+                                            modifier = Modifier.fillMaxWidth().weight(1f),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Text("No matching local songs found.", color = TextSecondary, fontSize = 14.sp)
+                                        }
+                                    } else {
+                                        LazyColumn(
+                                            modifier = Modifier.fillMaxSize(),
+                                            contentPadding = PaddingValues(bottom = 100.dp),
+                                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                                        ) {
+                                            itemsIndexed(filteredTracks) { index, track ->
+                                                SongRowItem(
+                                                    track = track,
+                                                    isPlaying = state.isPlaying && state.currentTrack?.id == track.id,
+                                                    isCurrent = state.currentTrack?.id == track.id,
+                                                    isFavorite = state.favorites.contains(track.id),
+                                                    onClick = {
+                                                        viewModel.setPlaylist(filteredTracks, index)
+                                                        onNavigateToPlayer()
+                                                    },
+                                                    onFavoriteToggle = {
+                                                        viewModel.toggleFavorite(track.id)
+                                                    },
+                                                    onAddToPlaylist = {
+                                                        trackToAddToPlaylist = track
+                                                    },
+                                                    onDeleteLocal = {
+                                                        deleteLocalTrack(context, track, deleteLauncher) {
+                                                            deviceTracks = scanLocalAudio(context)
+                                                            Toast.makeText(context, "Song deleted from device", Toast.LENGTH_SHORT).show()
+                                                        }
+                                                    }
+                                                )
+                                            }
+                                        }
+                                    }
+                                } else if (selectedFolder != null) {
+                                    // Drill-down songs in selected folder
+                                    val folderName = selectedFolder!!
+                                    val folderTracks = deviceTracks.filter { it.folderName == folderName }
+
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable { selectedFolder = null }
+                                            .padding(vertical = 4.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.KeyboardArrowLeft,
+                                            contentDescription = "Back",
+                                            tint = NeonCyan,
+                                            modifier = Modifier.size(24.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text(
+                                            text = "$folderName /",
+                                            color = TextPrimary,
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 16.sp
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            text = "${folderTracks.size} songs",
+                                            color = TextSecondary,
+                                            fontSize = 13.sp
+                                        )
+                                    }
+
+                                    Spacer(modifier = Modifier.height(12.dp))
+
+                                    LazyColumn(
+                                        modifier = Modifier.fillMaxSize(),
+                                        contentPadding = PaddingValues(bottom = 100.dp),
+                                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        itemsIndexed(folderTracks) { index, track ->
+                                            SongRowItem(
+                                                track = track,
+                                                isPlaying = state.isPlaying && state.currentTrack?.id == track.id,
+                                                isCurrent = state.currentTrack?.id == track.id,
+                                                isFavorite = state.favorites.contains(track.id),
+                                                onClick = {
+                                                    viewModel.setPlaylist(folderTracks, index)
+                                                    onNavigateToPlayer()
+                                                },
+                                                onFavoriteToggle = {
+                                                    viewModel.toggleFavorite(track.id)
+                                                },
+                                                onAddToPlaylist = {
+                                                    trackToAddToPlaylist = track
+                                                },
+                                                onDeleteLocal = {
+                                                    deleteLocalTrack(context, track, deleteLauncher) {
+                                                        deviceTracks = scanLocalAudio(context)
+                                                        Toast.makeText(context, "Song deleted from device", Toast.LENGTH_SHORT).show()
+                                                    }
+                                                }
+                                            )
+                                        }
+                                    }
+                                } else {
+                                    // Folders List view
+                                    val folders = deviceTracks.groupBy { it.folderName }
+                                    
+                                    LazyColumn(
+                                        modifier = Modifier.fillMaxSize(),
+                                        contentPadding = PaddingValues(bottom = 100.dp),
+                                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                                    ) {
+                                        items(folders.keys.toList()) { folderName ->
+                                            val count = folders[folderName]?.size ?: 0
+                                            Row(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .glassmorphic(cornerRadius = 20.dp)
+                                                    .clickable { selectedFolder = folderName }
+                                                    .padding(16.dp),
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Box(
+                                                    modifier = Modifier
+                                                        .size(46.dp)
+                                                        .clip(RoundedCornerShape(12.dp))
+                                                        .background(NeonPurple.copy(alpha = 0.2f)),
+                                                    contentAlignment = Alignment.Center
+                                                ) {
+                                                    Icon(
+                                                        imageVector = Icons.Rounded.Folder,
+                                                        contentDescription = null,
+                                                        tint = NeonCyan,
+                                                        modifier = Modifier.size(24.dp)
+                                                    )
+                                                }
+                                                
+                                                Spacer(modifier = Modifier.width(16.dp))
+                                                
+                                                Column(modifier = Modifier.weight(1f)) {
+                                                    Text(
+                                                        text = folderName,
+                                                        color = TextPrimary,
+                                                        fontWeight = FontWeight.SemiBold,
+                                                        fontSize = 15.sp,
+                                                        maxLines = 1,
+                                                        overflow = TextOverflow.Ellipsis
+                                                    )
+                                                    Spacer(modifier = Modifier.height(2.dp))
+                                                    Text(
+                                                        text = "$count tracks",
+                                                        color = TextSecondary,
+                                                        fontSize = 12.sp
+                                                    )
+                                                }
+                                                
+                                                Icon(
+                                                    imageVector = Icons.Rounded.ChevronRight,
+                                                    contentDescription = null,
+                                                    tint = TextSecondary,
+                                                    modifier = Modifier.size(20.dp)
+                                                )
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -637,6 +855,70 @@ fun LibraryScreen(
 }
 
 /**
+ * Helper to delete a local track from internal/external storage.
+ * Handles API differences for legacy path deletion, RecoverableSecurityException on Q,
+ * and createDeleteRequest on R (Android 11+).
+ */
+private fun deleteLocalTrack(
+    context: Context,
+    track: Track,
+    launcher: androidx.activity.result.ActivityResultLauncher<androidx.activity.result.IntentSenderRequest>,
+    onDeletedDirectly: () -> Unit
+) {
+    val resolver = context.contentResolver
+    val uri = track.mediaUri
+    
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+        try {
+            val pendingIntent = MediaStore.createDeleteRequest(resolver, listOf(uri))
+            val request = androidx.activity.result.IntentSenderRequest.Builder(pendingIntent.intentSender).build()
+            launcher.launch(request)
+        } catch (e: Exception) {
+            e.printStackTrace()
+            Toast.makeText(context, "Error deleting file: ${e.message}", Toast.LENGTH_SHORT).show()
+        }
+    } else {
+        try {
+            val deletedRows = resolver.delete(uri, null, null)
+            if (deletedRows > 0) {
+                onDeletedDirectly()
+            } else {
+                val projection = arrayOf(MediaStore.Audio.Media.DATA)
+                resolver.query(uri, projection, null, null, null)?.use { cursor ->
+                    if (cursor.moveToFirst()) {
+                        val dataIndex = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DATA)
+                        val path = cursor.getString(dataIndex)
+                        val file = java.io.File(path)
+                        if (file.exists() && file.delete()) {
+                            onDeletedDirectly()
+                            return
+                        }
+                    }
+                }
+                Toast.makeText(context, "Failed to delete file from device", Toast.LENGTH_SHORT).show()
+            }
+        } catch (securityException: SecurityException) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val recoverableSecurityException = securityException as? android.app.RecoverableSecurityException
+                if (recoverableSecurityException != null) {
+                    val request = androidx.activity.result.IntentSenderRequest.Builder(
+                        recoverableSecurityException.userAction.actionIntent.intentSender
+                    ).build()
+                    launcher.launch(request)
+                } else {
+                    Toast.makeText(context, "Permission denied to delete file", Toast.LENGTH_SHORT).show()
+                }
+            } else {
+                Toast.makeText(context, "Permission denied: ${securityException.message}", Toast.LENGTH_SHORT).show()
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            Toast.makeText(context, "Error: ${e.message}", Toast.LENGTH_SHORT).show()
+        }
+    }
+}
+
+/**
  * Helper to query internal and external MediaStore directories for audio file metadata.
  */
 private fun scanLocalAudio(context: Context): List<Track> {
@@ -647,7 +929,8 @@ private fun scanLocalAudio(context: Context): List<Track> {
         MediaStore.Audio.Media.TITLE,
         MediaStore.Audio.Media.ARTIST,
         MediaStore.Audio.Media.DURATION,
-        MediaStore.Audio.Media.ALBUM_ID
+        MediaStore.Audio.Media.ALBUM_ID,
+        MediaStore.Audio.Media.DATA
     )
     val selection = "${MediaStore.Audio.Media.IS_MUSIC} != 0"
     
@@ -658,6 +941,7 @@ private fun scanLocalAudio(context: Context): List<Track> {
             val artistCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.ARTIST)
             val durationCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DURATION)
             val albumIdCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.ALBUM_ID)
+            val dataCol = cursor.getColumnIndex(MediaStore.Audio.Media.DATA)
             
             while (cursor.moveToNext()) {
                 val id = cursor.getLong(idCol)
@@ -665,6 +949,17 @@ private fun scanLocalAudio(context: Context): List<Track> {
                 val artist = cursor.getString(artistCol)
                 val duration = cursor.getLong(durationCol)
                 val albumId = cursor.getLong(albumIdCol)
+                val path = if (dataCol != -1) cursor.getString(dataCol) else ""
+                
+                val folderName = if (path.isNullOrBlank()) {
+                    "Music"
+                } else {
+                    try {
+                        java.io.File(path).parentFile?.name ?: "Music"
+                    } catch (e: Exception) {
+                        "Music"
+                    }
+                }
                 
                 val contentUri = ContentUris.withAppendedId(
                     MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, id
@@ -680,7 +975,8 @@ private fun scanLocalAudio(context: Context): List<Track> {
                         artist = artist,
                         mediaUri = contentUri,
                         artworkUri = artworkUri,
-                        duration = duration
+                        duration = duration,
+                        folderName = folderName
                     )
                 )
             }

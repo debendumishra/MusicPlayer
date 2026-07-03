@@ -172,6 +172,9 @@ fun SearchScreen(
                             },
                             onAddToPlaylist = {
                                 trackToAddToPlaylist = track
+                            },
+                            onDownload = {
+                                viewModel.downloadTrack(track)
                             }
                         )
                     }

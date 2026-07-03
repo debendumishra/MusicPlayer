@@ -86,7 +86,7 @@ fun HomeScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = "Browse",
+                            text = "D Family",
                             color = TextPrimary,
                             fontSize = 32.sp,
                             fontWeight = FontWeight.Bold
@@ -313,6 +313,8 @@ fun HomeScreen(
                     .align(Alignment.BottomCenter)
                     .padding(horizontal = 16.dp, vertical = 16.dp)
             ) {
+                val bufferedProgress = if (totalDuration > 0) state.bufferedPosition.toFloat() / totalDuration else 0f
+
                 LargePlayerPanel(
                     track = track,
                     isPlaying = state.isPlaying,
@@ -320,6 +322,7 @@ fun HomeScreen(
                     progress = progress,
                     playbackProgressMs = currentPos,
                     durationMs = totalDuration,
+                    bufferedProgress = bufferedProgress,
                     onPlayPauseToggle = { viewModel.togglePlayPause() },
                     onPreviousClick = { viewModel.skipToPrevious() },
                     onNextClick = { viewModel.skipToNext() },
@@ -405,6 +408,8 @@ fun AlbumFolderCard(
                     model = artworkUrl,
                     contentDescription = title,
                     contentScale = ContentScale.Crop,
+                    placeholder = androidx.compose.ui.res.painterResource(id = com.example.glassmusic.R.drawable.default_cover),
+                    error = androidx.compose.ui.res.painterResource(id = com.example.glassmusic.R.drawable.default_cover),
                     modifier = Modifier
                         .fillMaxSize()
                         .clip(RoundedCornerShape(16.dp))
@@ -446,6 +451,8 @@ fun RecentTrackCard(
                     model = track.artworkModel,
                     contentDescription = track.title,
                     contentScale = ContentScale.Crop,
+                    placeholder = androidx.compose.ui.res.painterResource(id = com.example.glassmusic.R.drawable.default_cover),
+                    error = androidx.compose.ui.res.painterResource(id = com.example.glassmusic.R.drawable.default_cover),
                     modifier = Modifier
                         .fillMaxSize()
                         .clip(RoundedCornerShape(16.dp))
@@ -501,6 +508,7 @@ fun LargePlayerPanel(
     progress: Float,
     playbackProgressMs: Long,
     durationMs: Long,
+    bufferedProgress: Float,
     onPlayPauseToggle: () -> Unit,
     onPreviousClick: () -> Unit,
     onNextClick: () -> Unit,
@@ -533,6 +541,8 @@ fun LargePlayerPanel(
                     model = track.artworkModel,
                     contentDescription = null,
                     contentScale = ContentScale.Crop,
+                    placeholder = androidx.compose.ui.res.painterResource(id = com.example.glassmusic.R.drawable.default_cover),
+                    error = androidx.compose.ui.res.painterResource(id = com.example.glassmusic.R.drawable.default_cover),
                     modifier = Modifier
                         .fillMaxSize()
                         .clip(RoundedCornerShape(14.dp))
@@ -652,18 +662,34 @@ fun LargePlayerPanel(
         Spacer(modifier = Modifier.height(4.dp))
 
         // Seek Slider progress bar
-        Slider(
-            value = progress,
-            onValueChange = onSliderSeek,
-            colors = SliderDefaults.colors(
-                thumbColor = NeonCyan,
-                activeTrackColor = NeonCyan,
-                inactiveTrackColor = GlassBgColorLight
-            ),
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(24.dp)
-        )
+        Box(
+            modifier = Modifier.fillMaxWidth(),
+            contentAlignment = Alignment.CenterStart
+        ) {
+            LinearProgressIndicator(
+                progress = bufferedProgress.coerceIn(0f, 1f),
+                color = NeonCyan.copy(alpha = 0.35f),
+                trackColor = Color.Transparent,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(4.dp)
+                    .padding(horizontal = 6.dp)
+                    .clip(RoundedCornerShape(2.dp))
+            )
+
+            Slider(
+                value = progress,
+                onValueChange = onSliderSeek,
+                colors = SliderDefaults.colors(
+                    thumbColor = NeonCyan,
+                    activeTrackColor = NeonCyan,
+                    inactiveTrackColor = GlassBgColorLight.copy(alpha = 0.2f)
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(24.dp)
+            )
+        }
 
         Row(
             modifier = Modifier.fillMaxWidth(),
